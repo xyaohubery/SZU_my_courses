@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python RAG 知识问答系统 (数据库版)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background-color: #ffffff;
+            border-radius: 12px;
+            /* Fixed invalid box-shadow value */
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); 
+        }
+        .tab-button.active {
+            border-color: #3b82f6;
+            color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        .view {
+            display: none;
+        }
+        .view.active {
+            display: block;
+        }
+        #loading-indicator, #admin-loading-indicator, #ingest-loading-indicator { /* 新增 #ingest-loading-indicator */
+            display: none;
+        }
+        /* Custom Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            display: none; /* Hidden by default */
+        }
+        .modal-content {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+        .modal-buttons button {
+            margin: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px; /* Tailwind's rounded-full */
+            font-weight: 700; /* Tailwind's font-bold */
+            transition: all 0.3s ease;
+        }
+        .modal-buttons button:hover {
+            transform: scale(1.05);
+        }
+        .modal-buttons .confirm-btn {
+            background-color: #ef4444; /* Tailwind's bg-red-500 */
+            color: white;
+        }
+        .modal-buttons .confirm-btn:hover {
+            background-color: #dc2626; /* Tailwind's hover:bg-red-600 */
+        }
+        .modal-buttons .cancel-btn {
+            background-color: #6b7280; /* Tailwind's bg-gray-500 */
+            color: white;
+        }
+        .modal-buttons .cancel-btn:hover {
+            background-color: #4b5563; /* Tailwind's hover:bg-gray-600 */
+        }
+    </style>
+</head>
+<body class="p-4">
+    <div class="container">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-8 rounded-lg p-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md">
+            Python RAG 知识问答系统
+        </h1>
+
+        <!-- Tab Navigation -->
+        <div class="mb-6 border-b border-gray-200">
+            <nav class="flex -mb-px space-x-6">
+                <button id="user-tab" class="tab-button whitespace-nowrap py-4 px-1 border-b-2 font-medium text-lg active">
+                    问答界面
+                </button>
+                <button id="admin-tab" class="tab-button whitespace-nowrap py-4 px-1 border-b-2 font-medium text-lg">
+                    知识库管理
+                </button>
+            </nav>
+        </div>
+
+        <!-- User View (Q&A Interface) -->
+        <div id="user-view" class="view active">
+            <!-- API Key Input Section -->
+            <div class="mb-6">
+                <label for="api-key-input" class="block text-lg font-semibold text-gray-700 mb-2">
+                    输入您的 DeepSeek API 密钥：
+                </label>
+                <input type="password" id="api-key-input"
+                       class="w-full p-4 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                       placeholder="您的 DeepSeek API 密钥（例如 sk-xxxxxxxxxxxx）">
+                <p class="text-sm text-gray-500 mt-1">
+                    此密钥将用于调用 DeepSeek 语言模型。请注意保密。
+                </p>
+            </div>
+
+            <!-- Question Input Section -->
+            <div class="mb-6">
+                <label for="question-input" class="block text-lg font-semibold text-gray-700 mb-2">
+                    输入你的 Python 知识问题：
+                </label>
+                <textarea id="question-input"
+                          class="w-full p-4 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                          placeholder="例如：Python中列表和元组有什么区别？" rows="4"></textarea>
+                <p class="text-sm text-gray-500 mt-1">
+                    问题将基于后台知识库进行回答。
+                </p>
+            </div>
+
+            <!-- Action Button -->
+            <div class="mb-6 text-center">
+                <button id="ask-button"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transition duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-300">
+                    提问
+                </button>
+            </div>
+
+            <!-- Loading Indicator -->
+            <div id="loading-indicator" class="text-center text-blue-600 mb-6">
+                   <svg class="animate-spin h-8 w-8 text-blue-600 inline-block mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span>正在处理，请稍候...</span>
+            </div>
+
+            <!-- Answer Display Section -->
+            <div>
+                <label for="answer-output" class="block text-lg font-semibold text-gray-700 mb-2">
+                    回答：
+                </label>
+                <div id="answer-output"
+                     class="w-full p-4 bg-gray-100 border border-gray-300 rounded-lg min-h-[150px] text-gray-800 leading-relaxed overflow-auto">
+                    这里会显示答案。
+                </div>
+            </div>
+        </div>
+
+        <!-- Admin View (Knowledge Base Management) -->
+        <div id="admin-view" class="view">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <!-- Add new document -->
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4">添加新文档到 Firestore</h2>
+                    <div class="mb-4">
+                        <label for="doc-title-input" class="block text-lg font-semibold text-gray-700 mb-2">文档标题:</label>
+                        <input type="text" id="doc-title-input" placeholder="例如：Python 列表操作" class="w-full p-3 border border-gray-300 rounded-lg">
+                    </div>
+                    <div class="mb-4">
+                        <label for="doc-content-input" class="block text-lg font-semibold text-gray-700 mb-2">文档内容:</label>
+                        <textarea id="doc-content-input" rows="10" placeholder="在此处粘贴完整的 Python 文档..." class="w-full p-3 border border-gray-300 rounded-lg"></textarea>
+                    </div>
+                    <button id="save-doc-button" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300">
+                        保存到 Firestore 知识库
+                    </button>
+                    <div id="admin-loading-indicator" class="text-center text-green-600 mt-4">
+                        <svg class="animate-spin h-6 w-6 text-green-600 inline-block mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                       </svg>
+                       <span>处理中...</span>
+                    </div>
+
+                    <h2 class="text-2xl font-bold text-gray-800 mt-8 mb-4">构建向量知识库</h2>
+                    <p class="text-gray-700 mb-4">
+                        当您在 Firestore 中添加或删除文档后，需要点击此按钮来更新后端的向量知识库，以便问答系统能够检索到最新的信息。
+                    </p>
+                    <button id="ingest-data-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300">
+                        从 Firestore 重新构建向量知识库
+                    </button>
+                    <div id="ingest-loading-indicator" class="text-center text-blue-600 mt-4">
+                        <svg class="animate-spin h-6 w-6 text-blue-600 inline-block mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                       </svg>
+                       <span>正在构建中，请稍候...</span>
+                    </div>
+
+                </div>
+                <!-- Existing documents -->
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4">现有 Firestore 知识库文档</h2>
+                    <div id="knowledge-base-list" class="space-y-3 max-h-[400px] overflow-y-auto p-2 bg-gray-50 rounded-lg border">
+                        <p class="text-gray-500">正在加载知识库...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Modal Structure -->
+    <div id="custom-modal" class="modal-overlay">
+        <div class="modal-content">
+            <p id="modal-message" class="text-lg font-semibold text-gray-800 mb-4"></p>
+            <div class="modal-buttons">
+                <button id="modal-confirm-btn" class="confirm-btn">确定</button>
+                <button id="modal-cancel-btn" class="cancel-btn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // 导入 Firebase 和自定义工具函数
+        import { initializeAndAuthenticate, displayMessage, formatText, showModal, addDoc, onSnapshot, doc, deleteDoc, knowledgeBaseCol, db, userId } from './utils.js';
+
+        // --- DOM Element References ---
+        const userTab = document.getElementById('user-tab');
+        const adminTab = document.getElementById('admin-tab');
+        const userView = document.getElementById('user-view');
+        const adminView = document.getElementById('admin-view');
+        
+        // User View Elements
+        const apiKeyInput = document.getElementById('api-key-input');
+        const questionInput = document.getElementById('question-input');
+        const askButton = document.getElementById('ask-button');
+        const answerOutput = document.getElementById('answer-output');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        
+        // Admin View Elements
+        const docTitleInput = document.getElementById('doc-title-input');
+        const docContentInput = document.getElementById('doc-content-input');
+        const saveDocButton = document.getElementById('save-doc-button');
+        const knowledgeBaseList = document.getElementById('knowledge-base-list');
+        const adminLoadingIndicator = document.getElementById('admin-loading-indicator');
+        const ingestDataBtn = document.getElementById('ingest-data-btn'); // 新增
+        const ingestLoadingIndicator = document.getElementById('ingest-loading-indicator'); // 新增
+
+        // Custom Modal Elements (它们已经通过 utils.js 导出，但确保页面上有这些ID的元素)
+        const customModal = document.getElementById('custom-modal');
+        const modalMessage = document.getElementById('modal-message');
+        const modalConfirmBtn = document.getElementById('modal-confirm-btn');
+        const modalCancelBtn = document.getElementById('modal-cancel-btn');
+
+
+        // --- Core Application Logic ---
+
+        // 初始化 Firebase 和认证，并加载知识库列表
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeAndAuthenticate(() => { // initializeAndAuthenticate 现在没有回调参数了
+                if (window.knowledgeBaseCol) { // 检查全局变量是否已由 utils.js 设置
+                    loadKnowledgeBase(); // 如果 Firebase 和集合就绪，则加载 Firestore 知识库列表
+                } else {
+                    knowledgeBaseList.innerHTML = `<p class="text-red-600 font-semibold">Firebase 未配置或认证失败，无法加载知识库。</p>`;
+                }
+            });
+            setupTabs();
+        });
+
+
+        // --- Tab Management ---
+        function setupTabs() {
+            userTab.addEventListener('click', () => switchView('user'));
+            adminTab.addEventListener('click', () => switchView('admin'));
+        }
+
+        function switchView(viewName) {
+            if (viewName === 'user') {
+                userView.classList.add('active');
+                adminView.classList.remove('active');
+                userTab.classList.add('active');
+                adminTab.classList.remove('active');
+            } else {
+                adminView.classList.add('active');
+                userView.classList.remove('active');
+                adminTab.classList.add('active');
+                userTab.classList.remove('active');
+            }
+        }
+
+        // --- User View (Q&A) Logic ---
+        askButton.addEventListener('click', async () => {
+            const userApiKey = apiKeyInput.value.trim();
+            const userQuestion = questionInput.value.trim();
+
+            if (!userApiKey) {
+                displayMessage("请输入您的 DeepSeek API 密钥。", 'error', answerOutput);
+                return;
+            }
+            if (!userQuestion) {
+                displayMessage("请输入你的问题。", 'error', answerOutput);
+                return;
+            }
+
+            loadingIndicator.style.display = 'block';
+            askButton.disabled = true;
+            answerOutput.innerHTML = ''; // 清空之前的答案
+
+            try {
+                // 调用您的 Flask 后端服务 (backend_app.py) 的 /ask_rag 端点
+                const backendApiUrl = 'http://localhost:5000/ask_rag'; // 确保端口与您的后端服务一致
+                
+                const response = await fetch(backendApiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        question: userQuestion,
+                        deepseek_api_key: userApiKey
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.answer) {
+                    answerOutput.innerHTML = formatText(result.answer);
+                } else {
+                    let errorMessage = "抱歉，未能获得有效答案。";
+                    if (result.error) {
+                        errorMessage += ` 错误信息: ${result.error}`;
+                    } else if (!response.ok) {
+                        errorMessage += ` HTTP 状态码: ${response.status}`;
+                    }
+                    displayMessage(errorMessage, 'error', answerOutput);
+                    console.error('Backend API response error:', result);
+                }
+
+            } catch (error) {
+                console.error('Error during RAG process:', error);
+                displayMessage(`在获取答案时发生错误: ${error.message}。请确保后端服务 (backend_app.py) 正在运行。`, 'error', answerOutput);
+            } finally {
+                loadingIndicator.style.display = 'none';
+                askButton.disabled = false;
+            }
+        });
+
+        // --- Admin View (Knowledge Base) Logic ---
+        // loadKnowledgeBase 函数用于实时显示 Firestore 中的文档列表
+        function loadKnowledgeBase() {
+             // knowledgeBaseCol 是从 utils.js 导出的全局变量
+             if (!window.knowledgeBaseCol) { // 再次检查确保它已初始化
+                 knowledgeBaseList.innerHTML = `<p class="text-red-600 font-semibold">知识库集合未初始化，无法加载列表。</p>`;
+                 return;
+             }
+             onSnapshot(window.knowledgeBaseCol, (snapshot) => {
+                if (snapshot.empty) {
+                    knowledgeBaseList.innerHTML = '<p class="text-gray-500 p-4 text-center">Firestore 知识库目前为空。</p>';
+                    return;
+                }
+                knowledgeBaseList.innerHTML = '';
+                snapshot.docs.forEach(doc => {
+                    const data = doc.data();
+                    const docElement = document.createElement('div');
+                    docElement.className = 'p-3 bg-white border border-gray-200 rounded-lg shadow-sm flex justify-between items-center';
+                    docElement.innerHTML = `
+                        <span class="font-medium text-gray-700">${data.title || '无标题文档'}</span>
+                        <button data-id="${doc.id}" class="delete-doc-btn text-red-500 hover:text-red-700 font-semibold py-1 px-2 rounded">删除</button>
+                    `;
+                    knowledgeBaseList.appendChild(docElement);
+                });
+             });
+        }
+
+        // 保存新文档到 Firestore
+        saveDocButton.addEventListener('click', async () => {
+            const title = docTitleInput.value.trim();
+            const content = docContentInput.value.trim();
+
+            if (!title) {
+                showModal('请输入文档标题。', 'alert');
+                return;
+            }
+            if (!content) {
+                showModal('请输入文档内容。', 'alert');
+                return;
+            }
+            if (!window.knowledgeBaseCol) { // 检查集合是否已初始化
+                showModal("Firestore 知识库未初始化，无法保存。请刷新页面或检查Firebase配置。", 'alert');
+                return;
+            }
+
+            adminLoadingIndicator.style.display = 'block';
+            saveDocButton.disabled = true;
+
+            try {
+                // 使用从 utils.js 导入的 addDoc
+                await addDoc(window.knowledgeBaseCol, {
+                    title: title,
+                    content: content,
+                    createdAt: new Date()
+                });
+                docTitleInput.value = '';
+                docContentInput.value = '';
+                showModal('文档已成功保存到 Firestore 知识库！', 'alert');
+            } catch (error) {
+                console.error("Error saving document: ", error);
+                showModal(`保存失败: ${error.message}`, 'alert');
+            } finally {
+                adminLoadingIndicator.style.display = 'none';
+                saveDocButton.disabled = false;
+            }
+        });
+
+        // 删除 Firestore 中的文档
+        knowledgeBaseList.addEventListener('click', async (e) => {
+            if (e.target && e.target.classList.contains('delete-doc-btn')) {
+                const docId = e.target.dataset.id;
+                const confirmed = await showModal('确定要删除这个文档吗？', 'confirm');
+                if (confirmed) {
+                    try {
+                        // 使用从 utils.js 导入的 db 和 deleteDoc
+                        // 确保 db 和 knowledgeBaseCol 都在 utils.js 中被正确初始化并导出
+                        if (window.db && window.knowledgeBaseCol) {
+                             await deleteDoc(doc(window.db, window.knowledgeBaseCol.path, docId));
+                             showModal('文档已从 Firestore 删除。', 'alert');
+                        } else {
+                             showModal('数据库未连接，无法删除。', 'alert');
+                        }
+                    } catch (error) {
+                        console.error("Error deleting document: ", error);
+                        showModal(`删除失败: ${error.message}`, 'alert');
+                    }
+                }
+            }
+        });
+
+        // 新增：触发后端构建向量知识库
+        ingestDataBtn.addEventListener('click', async () => {
+            ingestLoadingIndicator.style.display = 'block';
+            ingestDataBtn.disabled = true;
+            showModal('正在从 Firestore 读取并构建向量知识库，这可能需要一些时间...', 'alert'); // 立即显示模态框
+
+            try {
+                // 调用您的 Flask 后端服务 (backend_app.py) 的 /ingest_from_firestore 端点
+                const backendApiUrl = 'http://localhost:5000/ingest_from_firestore'; 
+                
+                const response = await fetch(backendApiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                const result = await response.json();
+                if (result.success) {
+                    showModal(`知识库构建完成！${result.message}`, 'alert');
+                } else {
+                    showModal(`知识库构建失败: ${result.message}`, 'alert');
+                }
+            } catch (error) {
+                console.error('Error during ingestion:', error);
+                showModal(`连接后端服务失败或发生错误: ${error.message}。请确保后端服务 (backend_app.py) 正在运行。`, 'alert');
+            } finally {
+                ingestLoadingIndicator.style.display = 'none';
+                ingestDataBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
